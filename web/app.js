@@ -755,6 +755,8 @@ BIND.route = (v, refresh) => {
       .bindTooltip(esc(titleCase(s.name)), { className: "mv-tip", direction: "top", offset: [0, -6] })
       .on("click", () => openView({ type: "stop", i: s.i })).addTo(focusLayer);
   });
+  // il clic su una fermata della linea non deve arrivare anche alla mappa (che chiuderebbe la vista)
+  focusLayer.eachLayer((l) => { l.options.bubblingMouseEvents = false; });
   if (!refresh || !v.fitted) { fit(line.getBounds(), 15); v.fitted = true; }
 };
 
@@ -1180,8 +1182,19 @@ map.on("click", (e) => {
     drawPlanPins();
     render(true);
     runPlan();
+    return;
   }
+  // clic su un punto vuoto della mappa: si esce dalla vista del mezzo o della linea
+  if (["vehicle", "route"].includes(S.stack[S.stack.length - 1]?.type)) closeFocusView();
 });
+
+// chiude le viste mezzo/linea in cima alla pila, tornando alla vista da cui erano state aperte
+function closeFocusView() {
+  const focus = (v) => v.type === "vehicle" || v.type === "route";
+  while (S.stack.length > 1 && focus(S.stack[S.stack.length - 1])) S.stack.pop();
+  if (focus(S.stack[S.stack.length - 1])) S.stack = [{ type: S.tab }];
+  render();
+}
 map.on("contextmenu", (e) => {
   const pt = { lat: e.latlng.lat, lon: e.latlng.lng, name: `Punto sulla mappa (${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)})` };
   const el = document.createElement("div");
