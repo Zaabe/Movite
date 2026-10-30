@@ -590,13 +590,18 @@ async function render(refresh = false) {
   }
 }
 
-// barra fissa in cima alla sidebar: compare solo sul singolo mezzo, con la X per uscirne
+// barra fissa in cima alla sidebar: sul singolo mezzo la X per uscirne (fa da "indietro"),
+// nelle altre schermate di dettaglio (fermata, linea) il pulsante Indietro
 function renderViewBar(v) {
   const bar = $("#view-bar");
   const isVehicle = v.type === "vehicle";
-  bar.hidden = !isVehicle;
-  bar.innerHTML = isVehicle ? `<button class="close-x" id="btn-close-veh" title="Esci dalla visualizzazione del mezzo (Esc)">${I.close}Chiudi mezzo</button>` : "";
+  const hasBack = !isVehicle && S.stack.length > 1;
+  bar.hidden = !isVehicle && !hasBack;
+  bar.innerHTML = isVehicle
+    ? `<button class="close-x" id="btn-close-veh" title="Esci dalla visualizzazione del mezzo (Esc)">${I.close}Chiudi mezzo</button>`
+    : hasBack ? `<button class="back" id="btn-back" title="Indietro (Esc)">${I.back}Indietro</button>` : "";
   $("#btn-close-veh")?.addEventListener("click", closeVehicle);
+  $("#btn-back")?.addEventListener("click", back);
 }
 
 function onVehiclesUpdated() {
