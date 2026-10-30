@@ -121,6 +121,9 @@ const tileUrl = (t) => (useStadia ? TILES[t === "light" ? "light" : "dark"] + (s
 let tileErrors = 0;
 const tiles = L.tileLayer(tileUrl("dark"), {
   maxZoom: 19,
+  // su telefono Leaflet carica le tile solo a dito fermo: durante il trascinamento comparivano zone nere
+  updateWhenIdle: false,
+  keepBuffer: 4,
   attribution: '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Dati <a href="https://romamobilita.it/it/dati-aperti">Roma Mobilità</a>',
 }).addTo(map);
 tiles.getContainer().classList.toggle("base-tiles", !useStadia);
@@ -188,7 +191,29 @@ function panTo(latlng, zoom) {
 // ------------------------------------------------------------------ fermate sulla mappa
 // Le ~8000 fermate di superficie sono disegnate a mano su un canvas (visibili da zoom 15):
 // come layer Leaflet, aggiungerle/toglierle bloccava la mappa per ~50 ms a ogni cambio di zoom.
-const stopRenderer = L.canvas({ pane: "stopsPane", padding: 0.3 }).addTo(map);
+// Canvas alla densità reale dello schermo: Leaflet usa sempre 2x, su iPhone (3x) le icone risultavano sfocate.
+// Safari rifiuta canvas oltre ~16,7 milioni di pixel: in quel caso si scende di densità.
+const SharpCanvas = L.Canvas.extend({
+  _update() {
+    if (this._map._animatingZoom && this._bounds) return;
+    L.Renderer.prototype._update.call(this);
+    const b = this._bounds, size = b.getSize(), c = this._container;
+    let m = Math.min(3, window.devicePixelRatio || 1);
+    while (m > 1 && size.x * size.y * m * m > 16e6) m -= 0.5;
+    L.DomUtil.setPosition(c, b.min);
+    c.width = Math.round(m * size.x);
+    c.height = Math.round(m * size.y);
+    c.style.width = size.x + "px";
+    c.style.height = size.y + "px";
+    this._ctx.setTransform(m, 0, 0, m, 0, 0);
+    this._ctx.translate(-b.min.x, -b.min.y);
+    // sistema di riferimento del canvas: durante zoom e spostamenti animati Leaflet lo trasforma via CSS,
+    // quindi chi ridisegna nel frattempo deve usare questo, non lo zoom/origine correnti della mappa
+    this._frame = { zoom: this._map.getZoom(), origin: this._map.getPixelOrigin() };
+    this.fire("update");
+  },
+});
+const stopRenderer = new SharpCanvas({ pane: "stopsPane", padding: 0.3 }).addTo(map);
 let stopPts = [];   // [indice fermata, x, y] in coordinate layer, per l'hit-test
 
 function drawStops() {
@@ -260,7 +285,7 @@ function buildStops() {
 // Tutti i mezzi sono disegnati su un unico canvas: con ~900 marker HTML lo zoom scattava.
 map.createPane("vehiclesPane").style.zIndex = 610;
 map.getPane("vehiclesPane").style.pointerEvents = "none";
-const vehRenderer = L.canvas({ pane: "vehiclesPane", padding: 0.5 }).addTo(map);
+const vehRenderer = new SharpCanvas({ pane: "vehiclesPane", padding: 0.4 }).addTo(map);
 const hoverTip = L.tooltip({ className: "mv-tip", direction: "top", offset: [0, -18], opacity: 1 });
 let drawn = [];          // veicoli disegnati nell'ultimo frame (per hit-test), dal basso verso l'alto
 let needDraw = true;
@@ -318,12 +343,19 @@ function drawVehicle(ctx, v, p, z, t) {
   const type = r ? r.type : 3;
   const color = rColor(r);
   const sel = S.selVehicle === d.id;
-  const dim = v.rank === 0;
+  const x = p.x, y = p.y;
+
+  // mezzi di altre linee mentre se ne guarda una: puntini discreti, non sagome sbiadite
+  if (v.rank === 0) {
+    ctx.beginPath();
+    ctx.arc(x, y, z < 13 ? 2.5 : 3.5, 0, 7);
+    ctx.fillStyle = "rgba(139,147,168,.55)";
+    ctx.fill();
+    return;
+  }
   const far = z < 13 && !sel;
   const s = sel ? 1.3 : far ? 0.5 : z < 14 ? 0.78 : 1;
   const Rr = 11 * s;
-  const x = p.x, y = p.y;
-  ctx.globalAlpha = dim ? 0.16 : 1;
 
   if (sel) {   // anello pulsante sul mezzo selezionato
     const k = (t % 1600) / 1600;
@@ -333,11 +365,19 @@ function drawVehicle(ctx, v, p, z, t) {
     ctx.globalAlpha = 0.35 * (1 - k);
     ctx.fill();
     ctx.globalAlpha = 1;
-  } else if (!d.est && !far && !dim) {   // alone: segnale GPS live
+  } else if (!far) {
     ctx.beginPath();
     ctx.arc(x, y, Rr + 4.5, 0, 7);
-    ctx.fillStyle = color + "38";
-    ctx.fill();
+    if (d.est) {   // posizione stimata dall'orario: anello tratteggiato attorno, icona piena e leggibile
+      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = color;
+      ctx.setLineDash([2.5, 2.5]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else {       // alone: segnale GPS live
+      ctx.fillStyle = color + "38";
+      ctx.fill();
+    }
   }
 
   // corpo a goccia orientato verso la direzione di marcia
@@ -354,31 +394,42 @@ function drawVehicle(ctx, v, p, z, t) {
   if (!far) {   // ombra economica (shadowBlur su 900 forme sarebbe lento)
     ctx.save(); ctx.translate(0, 1.5 * s); ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.fill(); ctx.restore();
   }
-  ctx.fillStyle = d.est ? color + "8c" : color;
+  ctx.fillStyle = color;
   ctx.fill();
   ctx.lineWidth = far ? 1.2 : 2 * s;
   ctx.strokeStyle = "#fff";
-  if (d.est) ctx.setLineDash([3 * s, 2.5 * s]);
   ctx.stroke();
-  if (d.est) ctx.setLineDash([]);
+  if (far) return;
 
-  if (far) { ctx.globalAlpha = 1; return; }
-
-  const label = rLabel(r);
   const g = Rr * 1.2;
   ctx.save();
   ctx.translate(x - g / 2, y - g / 2);
   ctx.scale(g / 24, g / 24);
-  drawGlyph(ctx, type, color, label);
+  drawGlyph(ctx, type, color, rLabel(r));
   ctx.restore();
+}
 
-  // etichetta col numero di linea (non serve per la metro: la lettera è già nell'icona)
-  if ((z >= 14 || sel) && !dim && type !== 1) {
-    ctx.font = '800 11px "Plus Jakarta Sans", system-ui, sans-serif';
+// etichetta col numero di linea (non per la metro: la lettera è già nell'icona).
+// Si salta se si sovrapporrebbe a un'etichetta già messa: prima il selezionato, poi GPS, poi stimati.
+function drawLabels(ctx, list, z) {
+  const placed = [];
+  ctx.font = '800 11px "Plus Jakarta Sans", system-ui, sans-serif';
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  for (let k = list.length - 1; k >= 0; k--) {
+    const v = list[k];
+    const r = R(v.d.r);
+    const sel = S.selVehicle === v.d.id;
+    if (v.rank === 0 || (r && r.type === 1) || !(z >= 14 || sel)) continue;
+    const label = rLabel(r);
     let w = labelWidth.get(label);
     if (w == null) { w = ctx.measureText(label).width; labelWidth.set(label, w); }
+    const Rr = 11 * (sel ? 1.3 : z < 14 ? 0.78 : 1);
     const lw = w + 10, lh = 16;
-    const lx = x + Rr * 0.55, ly = y - Rr - lh * 0.55;
+    const lx = v.px.x + Rr * 0.55, ly = v.px.y - Rr - lh * 0.55;
+    if (!sel && placed.some((q) => lx < q[2] + 2 && lx + lw > q[0] - 2 && ly < q[3] + 2 && ly + lh > q[1] - 2)) continue;
+    placed.push([lx, ly, lx + lw, ly + lh]);
+    const color = rColor(r);
     roundRect(ctx, lx, ly, lw, lh, 5);
     ctx.fillStyle = color;
     ctx.fill();
@@ -386,11 +437,8 @@ function drawVehicle(ctx, v, p, z, t) {
     ctx.strokeStyle = "#fff";
     ctx.stroke();
     ctx.fillStyle = "#fff";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "middle";
     ctx.fillText(label, lx + 5, ly + lh / 2 + 0.5);
   }
-  ctx.globalAlpha = 1;
 }
 
 function drawVehicles(t) {
@@ -401,12 +449,15 @@ function drawVehicles(t) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, cv.width, cv.height);
   ctx.restore();
-  const z = map.getZoom();
+  // coordinate nel riferimento del canvas (vedi SharpCanvas): le icone restano sul loro tracciato
+  // anche mentre la mappa zooma o si sposta in modo animato
+  const f = vehRenderer._frame;
+  const z = f.zoom;
   const b = vehRenderer._bounds;
   const list = [];
   for (const v of S.vehicles.values()) {
     if (!vVisible(v)) continue;
-    const p = map.latLngToLayerPoint(v.pos);
+    const p = map.project(v.pos, f.zoom).subtract(f.origin);
     if (!b.contains(p)) continue;
     v.px = p;
     const dim = S.focusRoutes != null && !S.focusRoutes.has(v.d.r) && S.selVehicle !== v.d.id;
@@ -415,6 +466,7 @@ function drawVehicles(t) {
   }
   list.sort((a, b2) => a.rank - b2.rank || a.px.y - b2.px.y);
   for (const v of list) drawVehicle(ctx, v, v.px, z, t);
+  drawLabels(ctx, list, z);
   drawn = list;
 }
 vehRenderer.on("update", () => drawVehicles(performance.now()));
@@ -424,7 +476,8 @@ function hitVehicle(layerPoint) {
   for (let i = drawn.length - 1; i >= 0; i--) {
     const v = drawn[i];
     if (v.rank === 0) continue;   // i mezzi attenuati non sono cliccabili
-    const dx = v.px.x - layerPoint.x, dy = v.px.y - layerPoint.y;
+    const p = map.latLngToLayerPoint(v.pos);     // posizione attuale, nel riferimento corrente della mappa
+    const dx = p.x - layerPoint.x, dy = p.y - layerPoint.y;
     if (dx * dx + dy * dy <= rad * rad) return v;
   }
   return null;
@@ -500,7 +553,7 @@ function animate(t) {
   const sel = S.selVehicle && S.vehicles.get(S.selVehicle);
   if (sel) needDraw = true;   // anello pulsante
   if (S.follow && sel && S.moving.has(sel)) map.panTo(sel.pos, { animate: false });
-  if (needDraw && !map._animatingZoom) { needDraw = false; drawVehicles(t); }
+  if (needDraw) { needDraw = false; drawVehicles(t); }
   requestAnimationFrame(animate);
 }
 requestAnimationFrame(animate);
@@ -555,6 +608,8 @@ function closeVehicle() {
 }
 function setTab(tab) {
   S.tab = tab;
+  // su telefono, se il pannello è abbassato, toccare una scheda lo fa risalire per mostrarne il contenuto
+  if (isMobile() && $("#panel").classList.contains("collapsed")) setSheet("normal");
   $$("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   S.stack = [{ type: tab }];
   render();

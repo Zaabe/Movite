@@ -158,7 +158,7 @@ def walk_loader(g):
         state.walk_status = "Pronta"
         progress("Rete pedonale pronta: i tratti a piedi seguono le strade")
     except Exception as e:
-        state.walk_status = "Non disponibile (%s): uso la linea d'aria" % e
+        state.walk_status = "non ancora pronta (%s): riprovo tra qualche minuto" % e
         print(time.strftime("[%H:%M:%S] ") + state.walk_status, flush=True)
     finally:
         state.walk_busy = False

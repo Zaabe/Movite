@@ -103,6 +103,7 @@ def download(g, osm_dir, progress):
     tiles = _tiles_for(g)
     todo = [k for k in tiles if not os.path.exists(os.path.join(osm_dir, "%d_%d.json.gz" % k))]
     done = [len(tiles) - len(todo)]
+    failed = []                               # (riquadro, motivo): un errore non ferma gli altri
     lock = threading.Lock()
     progress("Rete pedonale: scarico le strade (%d/%d riquadri)" % (done[0], len(tiles)))
 
@@ -112,18 +113,20 @@ def download(g, osm_dir, progress):
                 if not todo:
                     return
                 key = todo.pop(0)
-            doc = _fetch_bbox(_tile_bbox(key), progress)
             path = os.path.join(osm_dir, "%d_%d.json.gz" % key)
             try:
+                doc = _fetch_bbox(_tile_bbox(key), progress)
                 with gzip.open(path + ".part", "wt", encoding="utf-8") as f:
                     json.dump(doc["elements"], f, separators=(",", ":"))
                 os.replace(path + ".part", path)
-            except OSError:
+            except Exception as e:
                 try:                          # niente riquadri a metà sul disco (es. disco pieno)
                     os.remove(path + ".part")
                 except OSError:
                     pass
-                raise
+                with lock:
+                    failed.append((key, gs.disk_error(e) if isinstance(e, OSError) else str(e)))
+                continue
             with lock:
                 done[0] += 1
                 progress("Rete pedonale: scarico le strade (%d/%d riquadri)" % (done[0], len(tiles)))
@@ -133,6 +136,9 @@ def download(g, osm_dir, progress):
         t.start()
     for t in threads:
         t.join()
+    if failed:
+        # i riquadri già scaricati restano sul disco: il prossimo tentativo riparte da quelli mancanti
+        raise RuntimeError("%d/%d riquadri non scaricati (%s)" % (len(failed), len(tiles), failed[0][1]))
     return tiles
 
 
