@@ -101,7 +101,11 @@ cancellerebbe anche i dati degli stack fermi.
    (`MOVITE_STADIA_KEY`, `MOVITE_WALKNET`…) si impostano nella sezione *Environment variables*.
 3. Per aggiornare: carica le modifiche su GitHub (`git push`) e in Portainer premi **Pull and
    redeploy** sullo stack, oppure attiva *GitOps updates* perché lo faccia da solo. I dati nel
-   volume `movite-data` restano.
+   volume `movite-data` restano. Il `docker-compose.yml` ha `pull_policy: build`, così a ogni
+   redeploy l'immagine viene ricostruita con il codice nuovo (pochi secondi).
+
+   Per controllare che il server abbia davvero l'ultima versione:
+   `curl -s https://<tuo-dominio>/app.js | wc -c` deve dare la stessa dimensione di `web/app.js`.
 
 **Esposto su internet:** chiunque conosca l'indirizzo può usare l'app (le API sono in sola
 lettura; i calcoli percorso contemporanei sono limitati a 2 per non rallentare il resto).

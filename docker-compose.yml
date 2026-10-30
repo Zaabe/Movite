@@ -13,6 +13,9 @@ services:
   movite:
     build: .
     image: movite:latest
+    # ricostruisce l'immagine a ogni avvio dello stack: senza, "Pull and redeploy" di Portainer
+    # scarica il codice nuovo ma riusa la vecchia immagine movite:latest (e l'app non si aggiorna)
+    pull_policy: build
     restart: unless-stopped
     ports:
       - "8070:8080"                # porta del server : porta nel container (8080 è già occupata sul server)
