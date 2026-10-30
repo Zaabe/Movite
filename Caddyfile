@@ -1,0 +1,4 @@
+# HTTPS automatico (Let's Encrypt) davanti a Movite. Il dominio arriva da MOVITE_DOMAIN.
+{$MOVITE_DOMAIN} {
+	reverse_proxy movite:8080
+}

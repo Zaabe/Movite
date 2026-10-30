@@ -1,0 +1,4 @@
+# fine riga Linux nel repository (il container gira su Linux), quelli di Windows per il .bat
+* text=auto eol=lf
+*.bat text eol=crlf
+*.png binary

@@ -1,0 +1,47 @@
+# Movite in un container.
+#
+#   Solo HTTP (se HTTPS lo fornisce già il tuo server/piattaforma, es. Traefik, Nginx, Coolify…):
+#     docker compose up -d --build                       -> http://<server>:8070
+#
+#   Con HTTPS automatico (Caddy + certificato Let's Encrypt; serve un dominio che punti al server
+#   e le porte 80 e 443 libere):
+#     MOVITE_DOMAIN=movite.tuodominio.it docker compose --profile https up -d --build
+#
+# Su iPhone l'app si installa solo in HTTPS: Safari > Condividi > "Aggiungi alla schermata Home".
+
+services:
+  movite:
+    build: .
+    image: movite:latest
+    restart: unless-stopped
+    ports:
+      - "8070:8080"                # porta del server : porta nel container (8080 è già occupata sul server)
+    volumes:
+      - movite-data:/data          # orari, cache e rete pedonale: sopravvivono agli aggiornamenti
+    environment:
+      # mappe Stadia (più leggere sul telefono) invece di OpenStreetMap: serve una chiave gratuita
+      # da stadiamaps.com, oppure registrare lì il dominio e impostare MOVITE_TILES: "stadia"
+      MOVITE_STADIA_KEY: ""
+      MOVITE_TILES: "auto"
+      # "0" disattiva la rete pedonale (circa metà della memoria; cammini stimati in linea d'aria)
+      MOVITE_WALKNET: "1"
+
+  caddy:
+    image: caddy:2
+    profiles: ["https"]
+    restart: unless-stopped
+    depends_on: [movite]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      MOVITE_DOMAIN: ${MOVITE_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  movite-data:
+  caddy-data:
+  caddy-config:

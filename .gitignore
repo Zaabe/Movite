@@ -1,0 +1,17 @@
+# dati scaricati e cache (si rigenerano da soli al primo avvio)
+data/
+*.pickle
+*.part
+*.lock
+
+# Python
+__pycache__/
+*.pyc
+
+# impostazioni locali degli strumenti e del sistema
+.claude/
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
