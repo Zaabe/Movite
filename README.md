@@ -67,6 +67,26 @@ Variabili utili: `MOVITE_HOST` (indirizzo di ascolto, `0.0.0.0` nel container), 
 `MOVITE_DATA` (cartella dati, `/data` nel container), `MOVITE_WALKNET`, `MOVITE_TILES`,
 `MOVITE_STADIA_KEY`.
 
+### Spazio su disco
+
+Movite usa nel volume circa **60 MB** (orari 45 MB + cache compressa 15 MB), più circa 40 MB
+per la rete pedonale; durante l'aggiornamento degli orari servono altri ~50 MB per qualche
+secondo. L'immagine Docker occupa ~200 MB. Se il disco è pieno Movite funziona lo stesso
+(senza cache: ogni avvio richiede ~10 s invece di 1), ma deve almeno poter scaricare gli orari:
+in quel caso la schermata iniziale dice "disco del server pieno" e Movite riprova ogni minuto.
+
+Per vedere e liberare spazio sul server:
+
+```
+df -h                      # spazio libero sui dischi
+docker system df           # quanto occupano immagini, container, volumi e cache di build
+docker image prune         # immagini senza nome lasciate dai redeploy
+docker builder prune       # cache delle build (le build di Portainer da Git la fanno crescere)
+```
+
+In Portainer: **Images → seleziona quelle "Unused" → Remove**. Evita `docker volume prune`:
+cancellerebbe anche i dati degli stack fermi.
+
 ### Aggiornare da GitHub con Portainer
 
 1. Crea su GitHub un repository vuoto (anche privato) e caricaci il progetto:

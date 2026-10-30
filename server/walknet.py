@@ -13,12 +13,13 @@ import heapq
 import json
 import math
 import os
-import pickle
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+import gtfs_static as gs
 
 ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
@@ -113,9 +114,16 @@ def download(g, osm_dir, progress):
                 key = todo.pop(0)
             doc = _fetch_bbox(_tile_bbox(key), progress)
             path = os.path.join(osm_dir, "%d_%d.json.gz" % key)
-            with gzip.open(path + ".part", "wt", encoding="utf-8") as f:
-                json.dump(doc["elements"], f, separators=(",", ":"))
-            os.replace(path + ".part", path)
+            try:
+                with gzip.open(path + ".part", "wt", encoding="utf-8") as f:
+                    json.dump(doc["elements"], f, separators=(",", ":"))
+                os.replace(path + ".part", path)
+            except OSError:
+                try:                          # niente riquadri a metà sul disco (es. disco pieno)
+                    os.remove(path + ".part")
+                except OSError:
+                    pass
+                raise
             with lock:
                 done[0] += 1
                 progress("Rete pedonale: scarico le strade (%d/%d riquadri)" % (done[0], len(tiles)))
@@ -468,13 +476,9 @@ def ensure(g, data_dir, progress, max_age_days=60):
     net = None
     stale = os.path.exists(net_path) and time.time() - os.path.getmtime(net_path) > max_age_days * 86400
     if os.path.exists(net_path) and not stale:
-        try:
-            with open(net_path, "rb") as f:
-                ver, net = pickle.load(f)
-            if ver != NET_VERSION:
-                net = None
-        except Exception:
-            net = None
+        obj = gs.read_pickle(net_path)
+        if obj and obj[0] == NET_VERSION:
+            net = obj[1]
     if net is None:
         lock = os.path.join(data_dir, "walknet.lock")
         # un altro processo Movite sta già scaricando: aspetta il suo risultato invece di rifarlo
@@ -500,9 +504,7 @@ def ensure(g, data_dir, progress, max_age_days=60):
                     os.remove(os.path.join(osm_dir, name))
             tiles = download(g, osm_dir, progress)
             net = compile_net(osm_dir, tiles, progress)
-            with open(net_path + ".part", "wb") as f:
-                pickle.dump((NET_VERSION, net), f, protocol=pickle.HIGHEST_PROTOCOL)
-            os.replace(net_path + ".part", net_path)
+            gs.write_pickle(net_path, (NET_VERSION, net), log=progress)   # se il disco è pieno resta in memoria
         finally:
             keeper.set()
             try:
@@ -513,17 +515,11 @@ def ensure(g, data_dir, progress, max_age_days=60):
     key = stops_key(g)
     sw_path = os.path.join(data_dir, "walkstops.pickle")
     sw = None
-    if os.path.exists(sw_path) and os.path.getmtime(sw_path) >= os.path.getmtime(net_path):
-        try:
-            with open(sw_path, "rb") as f:
-                ver, sw = pickle.load(f)
-            if ver != STOPS_VERSION or sw.key != key:
-                sw = None
-        except Exception:
-            sw = None
+    if os.path.exists(sw_path) and os.path.exists(net_path) and os.path.getmtime(sw_path) >= os.path.getmtime(net_path):
+        obj = gs.read_pickle(sw_path)
+        if obj and obj[0] == STOPS_VERSION and obj[1].key == key:
+            sw = obj[1]
     if sw is None:
         sw = build_stops(net, g, progress)
-        with open(sw_path + ".part", "wb") as f:
-            pickle.dump((STOPS_VERSION, sw), f, protocol=pickle.HIGHEST_PROTOCOL)
-        os.replace(sw_path + ".part", sw_path)
+        gs.write_pickle(sw_path, (STOPS_VERSION, sw), log=progress)
     return net, sw

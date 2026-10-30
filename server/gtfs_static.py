@@ -12,6 +12,7 @@ import array
 import bisect
 import calendar
 import csv
+import errno
 import io
 import math
 import os
@@ -20,10 +21,11 @@ import time
 import unicodedata
 import urllib.request
 import zipfile
+import zlib
 from collections import Counter, defaultdict
 
 GTFS_URL = "https://romamobilita.it/wp-content/uploads/shared/rome_static_gtfs.zip"
-CACHE_VERSION = 5
+CACHE_VERSION = 6
 
 WALK_SPEED = 1.2        # m/s
 WALK_DETOUR = 1.25      # le strade non sono linee rette
@@ -113,9 +115,16 @@ def ensure_gtfs(path, max_age=12 * 3600, log=print):
         with urllib.request.urlopen(req, timeout=180) as resp:
             data = resp.read()
         tmp = path + ".part"
-        with open(tmp, "wb") as f:
-            f.write(data)
-        os.replace(tmp, path)
+        try:
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
         log("GTFS scaricato (%.1f MB)" % (len(data) / 1e6))
         return True
     except urllib.error.HTTPError as e:
@@ -498,32 +507,60 @@ def nearby_stops(g, lat, lon, radius):
 
 
 # ---------------------------------------------------------------- cache su disco
+#
+# Le cache sono pickle compressi (zlib livello 1: ~5 volte più piccole, +0,1 s a caricarle).
+# Scriverle è un'ottimizzazione: se il disco è pieno si avvisa e si continua dalla memoria.
 
-def _read_cache(path, key):
+def write_pickle(path, obj, log=print):
+    """Salva obj compresso; False (senza errori) se non c'è spazio o il disco non è scrivibile."""
+    tmp = path + ".part"
+    try:
+        data = zlib.compress(pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL), 1)
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+        return True
+    except OSError as e:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        log("Cache non salvata (%s): continuo senza" % disk_error(e))
+        return False
+
+
+def read_pickle(path):
     try:
         with open(path, "rb") as f:
-            ver, k, obj = pickle.load(f)
-        if ver == CACHE_VERSION and k == key:
-            return obj
-    except FileNotFoundError:
-        pass
+            data = f.read()
+        if data[:1] == b"x":            # intestazione zlib
+            data = zlib.decompress(data)
+        return pickle.loads(data)
     except Exception:
-        pass
+        return None
+
+
+def disk_error(e):
+    if getattr(e, "errno", None) == errno.ENOSPC:
+        return "disco pieno"
+    return str(e)
+
+
+def remove_files(cache_dir, prefix, keep=None):
+    """Elimina le cache superate (prima di scriverne di nuove, così lo spazio si libera subito)."""
+    for name in os.listdir(cache_dir):
+        if name.startswith(prefix) and (name.endswith(".pickle") or name.endswith(".part")) and name != keep:
+            try:
+                os.remove(os.path.join(cache_dir, name))
+            except OSError:
+                pass
+
+
+def _read_cache(path, key):
+    obj = read_pickle(path)
+    if obj and obj[0] == CACHE_VERSION and obj[1] == key:
+        return obj[2]
     return None
-
-
-def _write_cache(path, key, obj, keep_prefix=None):
-    with open(path + ".part", "wb") as f:
-        pickle.dump((CACHE_VERSION, key, obj), f, protocol=pickle.HIGHEST_PROTOCOL)
-    os.replace(path + ".part", path)
-    if keep_prefix:                       # elimina le cache superate dello stesso tipo
-        d = os.path.dirname(path)
-        for name in os.listdir(d):
-            if name.startswith(keep_prefix) and name.endswith(".pickle") and name != os.path.basename(path):
-                try:
-                    os.remove(os.path.join(d, name))
-                except OSError:
-                    pass
 
 
 def base_path(cache_dir, zip_path):
@@ -534,28 +571,16 @@ def load_base(zip_path, cache_dir, log=print):
     path = base_path(cache_dir, zip_path)
     b = _read_cache(path, zip_key(zip_path))
     if b is None:
+        remove_files(cache_dir, "base-")
         b = build_base(zip_path, log=log)
-        _write_cache(path, b.zip_key, b, keep_prefix="base-")
+        write_pickle(path, (CACHE_VERSION, b.zip_key, b), log=log)
     return b
 
 
-def day_path(cache_dir, now=None):
-    return os.path.join(cache_dir, "dataset-%s.pickle" % ymd_str(*rome_date(now or time.time())))
-
-
 def load(zip_path, cache_dir, log=print):
-    """Dataset del giorno: dalla cache del giorno (con connessioni) o ricavato dalla base."""
-    key = zip_key(zip_path)
-    g = _read_cache(day_path(cache_dir), key)
-    if g is not None:
-        log("Dati caricati dalla cache")
-        return g
+    """Dataset del giorno, ricavato dalla base (~0,5 s): non serve salvarlo a parte."""
+    remove_files(cache_dir, "dataset-")    # cache del giorno delle versioni precedenti
     return build_day(load_base(zip_path, cache_dir, log), log=log)
-
-
-def save_day(g, cache_dir):
-    """Salva il dataset del giorno completo di connessioni, per riavvii istantanei."""
-    _write_cache(day_path(cache_dir, g.built_at), g.zip_key, g, keep_prefix="dataset-")
 
 
 def time_bisect(g, t):

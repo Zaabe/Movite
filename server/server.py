@@ -5,6 +5,7 @@ Avvio:  python server/server.py   (poi apri http://localhost:8080)
 import bisect
 import math
 import gzip
+import errno
 import json
 import mimetypes
 import os
@@ -78,14 +79,17 @@ def install(g):
 
 
 def finish_day(g):
-    """Connessioni del calcolo percorsi, poi salvataggio del giorno per riavvii istantanei."""
+    """Connessioni del calcolo percorsi (~2 s), dopo i primi secondi dall'avvio."""
     time.sleep(1.5)        # prima la pagina e i primi bus, poi il lavoro pesante
     gs.build_connections(g)
-    if state.data is g:
-        try:
-            gs.save_day(g, DATA)
-        except OSError as e:
-            print("Cache del giorno non salvata: %s" % e, flush=True)
+
+
+def explain(e):
+    """Messaggio per la schermata iniziale."""
+    if getattr(e, "errno", None) == errno.ENOSPC:
+        return ("disco del server pieno: Movite non riesce a salvare gli orari in %s. "
+                "Libera spazio sul server (vedi README, sezione Docker); Movite riprova da solo." % DATA)
+    return str(e)
 
 
 def refresh():
@@ -118,14 +122,17 @@ def update_gtfs():
 def loader():
     """Avvio immediato con i dati già presenti; aggiornamenti e cambi di giorno in background."""
     os.makedirs(DATA, exist_ok=True)
-    if not os.path.exists(ZIP):
-        gs.ensure_gtfs(ZIP, log=log)          # primissimo avvio: senza orari non si può partire
     while True:
         try:
+            if not os.path.exists(ZIP):
+                gs.ensure_gtfs(ZIP, log=log)  # primissimo avvio: senza orari non si può partire
             refresh()
         except Exception as e:
-            state.error = str(e)
-            log("Errore nel caricamento dati: %s" % e)
+            state.error = explain(e)
+            log("Errore nel caricamento dati: %s" % state.error)
+            if state.data is None:            # finché non si parte, riprova ogni minuto
+                time.sleep(60)
+                continue
         try:
             update_gtfs()
         except Exception as e:
